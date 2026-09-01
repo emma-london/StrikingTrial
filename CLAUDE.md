@@ -69,6 +69,16 @@ Two lessons already paid for in this repo:
 - **Round fixtures to significant digits, not decimal places.** `round(v, 10)` on
   an envelope value of 3e-7 leaves 5e-11 of error, which swamps a 1e-6 relative
   tolerance and produces a failure that looks like a real disagreement.
+- **A fixture you cannot regenerate cannot be debugged.** `eltham.json` was first
+  written by a shell one-liner that was not kept. When the TypeScript disagreed
+  with it there was no way to re-derive either side, so the disagreement was read
+  as a rounding problem for some time; it was actually a leakage window of
+  ±21.5 Hz against ±20 (`round(20 / 5.383)` bins, versus bins genuinely within
+  20 Hz). Every generated fixture now has a script under `prototype/`.
+- **Store a measurement once.** That same file stored each partial's gain to 2 dp
+  and the envelope it came from to 1 dp, so a partial's gain disagreed with the
+  interference computed against it. Partials are now bin indices and both the
+  frequency and the gain are read back from the grid.
 
 Mutation-check anything numerical: break the implementation deliberately, confirm
 the test goes red for the right reason, revert. It has already caught one test in
@@ -114,9 +124,32 @@ through getUserMedia, the worklet and the worker, pulls the WAV back out of OPFS
 and checks the bells' partials are present at the right levels. It caught nothing
 yet, but it is the only check that covers the path the whole app depends on.
 
+## The tower profile, and why partials are chosen per session
+
+`src/logic/profile/` holds what was measured at Eltham and picks which
+frequencies to listen on. The profile deliberately does not store "bell 6's
+partials", because that is not a property of the bell — it depends on which bells
+are ringing. Eltham's treble is exactly twice the tenor and its second exactly
+1.5x the sixth, so ringing on eight breaks six of the eighteen partials chosen
+for the back six and strips the sixth of all of its. The selection therefore runs
+once the ringing set is known.
+
+`eltham.json` is generated — never hand-edited — by `prototype/makeprofile.py`,
+which measures the gain spectrum from the recording and writes the profile and
+the `reference` block together. Regenerate it there and copy it across.
+
+`reference` is a **regression pin, not an oracle**: the same rule written twice.
+It catches an unintended change in the TypeScript and nothing more. What says the
+rule is any good is the striking accuracy the Python measured on the recording.
+
+Two bells can be unheard for different reasons and `unheardBells` keeps them
+apart: `not-measured` (never recorded here — Eltham's front two) and
+`drowned-out` (measured, but every partial is buried under another ringing bell).
+They look identical on screen and have opposite fixes, and neither is a bug.
+
 ## Not yet built
 
-The tower profile store, the live bell indicator, the row display, and the
-tracker. The tracker is the known-unreliable piece — two implementations each
-work on the ring they were built for and fail on the other — so treat any row
-output as provisional until that changes.
+The live bell indicator, the row display, and the tracker. The tracker is the
+known-unreliable piece — two implementations each work on the ring they were
+built for and fail on the other — so treat any row output as provisional until
+that changes.
