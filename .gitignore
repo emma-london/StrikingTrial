@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vite
+
+# Session recordings and captured audio never go in git. They are large,
+# they are the user's data, and some of them are other people's copyright.
+/recordings/
+*.wav
+*.m4a
+*.mp3
+*.webm
+
+# tsc -b build info
+*.tsbuildinfo

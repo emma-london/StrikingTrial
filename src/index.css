@@ -1,0 +1,22 @@
+/* Minimal reset only. The real styles live in App.css, as in the other
+   apps in the family. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body,
+h1,
+h2,
+h3,
+p,
+figure {
+  margin: 0;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+}
