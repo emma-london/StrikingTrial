@@ -36,6 +36,24 @@ Note the failure modes it distinguishes, because they have different fixes: one
 slot pointing at a neighbour is a local confusion; several slots sharing a
 constant offset is a phase error; a growing offset is drift.
 
+**The diagonal check now picks the row phase, so it can no longer validate it.**
+A check you optimise cannot fail informatively. What replaces it for the phase is
+the *position lead* — how far the winning alignment beats the next — which is a
+property of the landscape rather than of the chosen answer. ADR-0004 has the
+calibration.
+
+## Low confidence is sometimes the right answer
+
+The recording the identification gate was least sure about turned out to be a
+beginners' practice piece: people going wrong repeatedly, bells clashing in
+rounds, unreliable handstroke leads. It measures worst of nine on every striking
+metric. Two rounds of engineering went into "fixing" that low confidence before
+anyone asked whether the input deserved a confident answer — and both attempts
+made the phase worse across the whole set, one producing a confidently wrong
+result.
+
+Before treating a refusal as a defect, check what it is refusing.
+
 ## The DSP core
 
 `src/logic/dsp/` is pure computation — no `AudioContext`, no `fetch`, no DOM — so
