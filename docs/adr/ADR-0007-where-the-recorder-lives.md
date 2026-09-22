@@ -84,6 +84,74 @@ open on design grounds — the ringer's 500–800 ms window, what a ringer can a
 mid-pull, and the attribution-confidence measurement that has not been done. B
 should not be taken while that is open, because B decides it by accident.
 
+## E. Native recorder, a queue, PWA consumes the queue (Emma, 19 Sep)
+
+Emma's sharper version of B: the native recorder is uninterruptible and writes to
+a queue; the PWA reads the queue and, if it is interrupted, catches up. Lag in
+delivering post-row feedback is acceptable — 100 ms does not matter.
+
+The reasoning behind it is sound and the tolerance is correctly placed. It breaks
+on a part of the stack that is not obvious from the design.
+
+**Three claims in it, and the first two hold.** A native recorder is
+uninterruptible: that is the whole native path and it is well supported. A queue
+is trivial — a ring buffer or a run of files inside the native app, with the
+sample index on every block exactly as ADR-0003 already does.
+
+**The third does not: a PWA cannot read that queue live.** There is no transport.
+
+- **No shared storage.** A PWA's storage is per-origin OPFS; a native app cannot
+  write into it, and a PWA cannot read arbitrary device files without a user
+  gesture per file. Chrome's directory picker, which would otherwise watch a
+  folder, is desktop-only.
+- **A local server in the native app is refused by Apple, explicitly.** Safari and
+  WKWebView do not treat `localhost` as a trustworthy origin, so an HTTPS page
+  cannot open `ws://localhost` or `http://localhost` — it is mixed content and it
+  is blocked. Apple's own guidance on that thread is to use `WKScriptMessage`
+  instead, which means the web content must be running inside *your* WebView.
+  Chrome is narrowing the same route with a Local Network Access permission
+  prompt.
+- **Web Bluetooth, WebUSB and Web Serial** do not exist in iOS Safari.
+- **A relay over the network** needs a network, and these apps are used in stone
+  boxes with no signal.
+
+So the only transport that works is putting the web app inside the native app's
+WebView — **which is option D**. And once the web app is in a WebView, the
+WebView can hold the microphone itself and the queue has nothing left to do.
+**The live-queue design converges on Capacitor.**
+
+**A second problem, independent of the transport.** "The PWA catches up after an
+interruption" assumes the PWA is *running*. On iOS a backgrounded web app is
+suspended, not throttled — no JavaScript executes at all. It does not catch up
+100 ms late; it catches up when someone picks the phone up and looks at it. For a
+post-row nudge that is not lag, it is absence.
+
+**And the part that inverts the whole idea.** On Android, what keeps a
+backgrounded PWA alive *is that it holds the microphone* — that is why Chrome runs
+a foreground service and shows the persistent notification. Move the microphone
+into a native app and the PWA loses the exemption that was keeping it alive.
+**The split can make the PWA's survival worse than not splitting at all.** Media
+playback also keeps a page alive, so a page could play silence to stay running;
+that is a known hack and should be named as one rather than designed around.
+
+**What E resolves into.** Usefully, it collapses the decision rather than adding
+to it:
+
+- For **record-and-report**, E is right in instinct and heavier than the job
+  needs. There is no live consumer, so there is no queue — only a file at the
+  end. That is **C**, and it works today with the recorder already on the phone.
+- For **live feedback**, E is not available as native-plus-PWA, because the
+  transport forces a WebView. That is **D**.
+
+So the alternatives to a pure PWA are file handoff and Capacitor, and the middle
+ground collapses into one or the other. That is worth knowing before any of it is
+built.
+
+**Not established:** whether Chrome on Android currently permits an HTTPS page to
+reach `ws://localhost`. Chromium has historically treated localhost as
+potentially trustworthy and is now adding a permission prompt. It does not change
+the conclusion, because the design needs both platforms and iOS refuses.
+
 ## What would settle it
 
 - Tuesday's heartbeat log (ADR-0006): whether a PWA survives a pocket on Android.

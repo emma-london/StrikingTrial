@@ -126,15 +126,22 @@ describe('largestDriftStep', () => {
     const readings = [
       monitor.read(5000, samplesFor(5000), AWAKE),
       monitor.read(10_000, samplesFor(10_000), AWAKE),
-      // Eight seconds swallowed between here and the next reading.
-      monitor.read(15_000, samplesFor(7000), POCKET),
-      monitor.read(20_000, samplesFor(12_000), AWAKE),
+      // Stalled from here to the next reading: the wall clock advances five
+      // seconds and the sample count does not move. It does not go *backwards* —
+      // that is a worklet restart, and `read` refuses it (tested above).
+      monitor.read(15_000, samplesFor(10_000), POCKET),
+      // Resumed, and keeping up again: five more seconds of wall, five of audio.
+      monitor.read(20_000, samplesFor(15_000), AWAKE),
     ]
 
     const step = largestDriftStep(readings)
-    expect(step!.jumpMs).toBeCloseTo(8000, 6)
+    expect(step!.jumpMs).toBeCloseTo(5000, 6)
     expect(step!.afterSample).toBe(samplesFor(10_000))
     expect(step!.atWallMs).toBe(15_000)
+
+    // The stall is still in the total after recovery, but only one interval
+    // carries it — which is the slope/step separation the display relies on.
+    expect(readings[3].driftMs).toBeCloseTo(5000, 6)
   })
 
   it('returns null below two readings rather than inventing a clean session', () => {
