@@ -36,6 +36,25 @@ export type SessionEvent =
   | { kind: 'marker'; sample: number; label: string }
   | { kind: 'calibration'; sample: number; passed: boolean; detail: string }
   | { kind: 'lock'; sample: number; locked: boolean }
+  /**
+   * The two clocks, compared on purpose (ADR-0006). The only place in this log
+   * that records wall-clock time, and it is here so that a session can say
+   * whether capture stopped while nobody was watching.
+   */
+  | {
+      kind: 'heartbeat'
+      sample: number
+      wallMs: number
+      driftMs: number
+      visibility: 'visible' | 'hidden'
+      wakeLock: boolean
+    }
+  /**
+   * The session was stopped deliberately. **A log with no `ended` event is a
+   * session that died**, and its last heartbeat says when and in what state.
+   * That is the whole point of writing this one (ADR-0006).
+   */
+  | { kind: 'ended'; sample: number; reason: 'stopped' }
 
 export interface StoredSessionLog {
   meta: SessionMeta
@@ -76,6 +95,27 @@ export class SessionLog {
 
   lock(sample: number, locked: boolean): void {
     this.push({ kind: 'lock', sample, locked })
+  }
+
+  /** A comparison of the audio clock against the wall clock. See ADR-0006. */
+  heartbeat(reading: {
+    sample: number
+    wallMs: number
+    driftMs: number
+    visibility: 'visible' | 'hidden'
+    wakeLock: boolean
+  }): void {
+    this.push({ kind: 'heartbeat', ...reading })
+  }
+
+  /** Mark a clean stop. Its absence is what identifies a session that died. */
+  ended(sample: number): void {
+    this.push({ kind: 'ended', sample, reason: 'stopped' })
+  }
+
+  /** Did this session stop deliberately? False means it was killed. */
+  get endedCleanly(): boolean {
+    return this.events.some((event) => event.kind === 'ended')
   }
 
   toJSON(): StoredSessionLog {
@@ -133,4 +173,33 @@ export function parseSessionLog(raw: unknown): StoredSessionLog {
   }
 
   return { meta: meta as SessionMeta, events: events as SessionEvent[] }
+}
+
+/**
+ * Did this stored session stop deliberately?
+ *
+ * ADR-0006: the log is flushed during recording, so a session the phone killed
+ * still has everything up to the moment it died — but no `ended` event. The
+ * session list uses this to say "ended unexpectedly" rather than showing a short
+ * recording that looks like a short practice.
+ */
+export function endedCleanly(log: StoredSessionLog): boolean {
+  return log.events.some((event) => event.kind === 'ended')
+}
+
+/**
+ * The last heartbeat in a stored log, or null if there is none.
+ *
+ * For a session that died, this is the evidence: when it was last alive, how far
+ * the audio clock had fallen behind the wall clock by then, and whether the page
+ * was visible and holding the wake lock at the time.
+ */
+export function lastHeartbeat(
+  log: StoredSessionLog,
+): Extract<SessionEvent, { kind: 'heartbeat' }> | null {
+  for (let i = log.events.length - 1; i >= 0; i--) {
+    const event = log.events[i]
+    if (event.kind === 'heartbeat') return event
+  }
+  return null
 }

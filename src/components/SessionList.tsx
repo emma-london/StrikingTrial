@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { deleteSession, listSessions, readSessionFile, storageEstimate, type SessionSummary } from '../logic/session/store'
+import { endedCleanly, lastHeartbeat, sampleToSeconds } from '../logic/session/sessionLog'
 
 /**
  * The sessions on the phone, and how to get them off it.
@@ -61,6 +62,12 @@ export default function SessionList({ refreshKey }: { refreshKey: number }) {
                 ? `${session.log.meta.tower} · bells ${session.log.meta.bells.join(' ')} · ${session.log.events.length} events`
                 : session.problem ?? 'no log'}
             </p>
+            {/* ADR-0006: a log with no `ended` event is a session the phone
+                killed. Saying so beats showing a short recording that reads as
+                a short practice. */}
+            {session.log && !endedCleanly(session.log) && (
+              <p className="session-warning">{describeUnexpectedEnd(session.log)}</p>
+            )}
             <div className="session-actions">
               <button type="button" onClick={() => download(`${session.id}.wav`)}>Audio</button>
               {session.hasLog && (
@@ -83,6 +90,15 @@ export default function SessionList({ refreshKey }: { refreshKey: number }) {
       </ul>
     </section>
   )
+}
+
+function describeUnexpectedEnd(log: NonNullable<SessionSummary['log']>): string {
+  const last = lastHeartbeat(log)
+  if (!last) return 'Ended unexpectedly, before the first heartbeat — nothing to say when.'
+  const minutes = sampleToSeconds(last.sample, log.meta.sampleRate) / 60
+  const drift = last.driftMs >= 1000 ? `, audio ${(last.driftMs / 1000).toFixed(0)}s behind by then` : ''
+  const state = last.visibility === 'hidden' ? 'in the background' : 'in the foreground'
+  return `Ended unexpectedly after ${minutes.toFixed(1)} min, ${state}${drift}.`
 }
 
 function formatBytes(bytes: number): string {

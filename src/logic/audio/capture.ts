@@ -1,4 +1,8 @@
 import { SessionLog, type SessionMeta } from '../session/sessionLog'
+import { HeartbeatMonitor } from '../session/heartbeat'
+import { blockLevel, LevelMeter } from '../session/level'
+import { keepScreenAwake, type ScreenLock } from '../session/wakeLock'
+import { saveLog } from '../session/store'
 
 /**
  * Owns the microphone, the audio graph and the recorder worker for one session.
@@ -9,16 +13,39 @@ import { SessionLog, type SessionMeta } from '../session/sessionLog'
  * worklet and is never recomputed here, so a delayed or dropped message cannot
  * pull the recording and the event log out of alignment.
  *
+ * Since ADR-0006 it also keeps the session alive-and-honest: a heartbeat every
+ * few seconds comparing the audio clock against the wall clock, the log flushed
+ * to storage each time, and a wake lock held for the duration. The flush is the
+ * important half — without it a session the phone kills takes its own evidence
+ * with it, which is the one case the log exists for.
+ *
  * This layer is browser plumbing and is deliberately thin — it is a manual
  * device check, not a unit test (see CLAUDE.md). Everything with a decision in
  * it lives in the pure modules it calls.
  */
 
+export interface HeartbeatView {
+  sample: number
+  driftMs: number
+  elapsedWallMs: number
+  wakeLock: boolean
+  visibility: 'visible' | 'hidden'
+  /** Held peak and latest RMS, 0-1 of full scale, and any clipping so far. */
+  peak: number
+  rms: number
+  clipped: number
+}
+
 export interface CaptureCallbacks {
   /** Every captured block, for analysis. Called after the block is queued for writing. */
   onBlock?: (startSample: number, pcm: Int16Array) => void
+  /** Each heartbeat, for the recording screen. Never the measurement. */
+  onHeartbeat?: (view: HeartbeatView) => void
   onError?: (message: string) => void
 }
+
+/** How often the two clocks are compared, and the log flushed. ADR-0006. */
+const HEARTBEAT_MS = 5000
 
 export interface CaptureHandle {
   readonly log: SessionLog
@@ -51,6 +78,13 @@ export async function startCapture(
   const log = new SessionLog({ ...meta, sampleRate })
   let latestSample = 0
 
+  const meter = new LevelMeter()
+  const monitor = new HeartbeatMonitor(Date.now(), sampleRate, HEARTBEAT_MS)
+  let wakeLockHeld = false
+  const screenLock: ScreenLock = keepScreenAwake((held) => {
+    wakeLockHeld = held
+  })
+
   const worker = new Worker(new URL('../../workers/recorder.worker.ts', import.meta.url), {
     type: 'module',
   })
@@ -76,6 +110,10 @@ export async function startCapture(
     const forWriting = pcm.slice()
     worker.postMessage({ type: 'write', pcm: forWriting }, [forWriting.buffer])
 
+    // Cheap, and it answers "is this phone hearing the bells at all" in the
+    // tower rather than at home. Says nothing about striking.
+    meter.push(blockLevel(pcm))
+
     try {
       callbacks.onBlock?.(startSample, pcm)
     } catch (error) {
@@ -85,11 +123,49 @@ export async function startCapture(
 
   source.connect(node)
 
+  // A background tab has its timers throttled, so heartbeats can arrive late or
+  // stop entirely. That is not a problem to solve — it is signal. A late beat
+  // still records the true elapsed wall time, and a run of missing beats with
+  // no `ended` event afterwards is exactly what a killed session looks like.
+  const beat = async () => {
+    const now = Date.now()
+    const visibility = document.visibilityState === 'visible' ? 'visible' : 'hidden'
+    try {
+      const reading = monitor.read(now, latestSample, { visibility, wakeLock: wakeLockHeld })
+      log.heartbeat({
+        sample: reading.sample,
+        wallMs: reading.wallMs,
+        driftMs: reading.driftMs,
+        visibility: reading.visibility,
+        wakeLock: reading.wakeLock,
+      })
+      callbacks.onHeartbeat?.({
+        sample: reading.sample,
+        driftMs: reading.driftMs,
+        elapsedWallMs: reading.elapsedWallMs,
+        wakeLock: reading.wakeLock,
+        visibility: reading.visibility,
+        peak: meter.peak,
+        rms: meter.rms,
+        clipped: meter.clipped,
+      })
+      // The flush is the point of the whole mechanism (ADR-0006): without it a
+      // killed session loses its own account of being killed.
+      await saveLog(log.toJSON())
+    } catch (error) {
+      // Never let the bookkeeping take down the recording (ADR-0001).
+      callbacks.onError?.(`heartbeat failed: ${String(error)}`)
+    }
+  }
+  const heartbeatTimer = setInterval(() => void beat(), HEARTBEAT_MS)
+
   return {
     log,
     sampleRate,
     currentSample: () => latestSample,
     async stop() {
+      clearInterval(heartbeatTimer)
+      await screenLock.release()
       node.port.postMessage('stop')
       node.port.onmessage = null
       source.disconnect()
@@ -110,6 +186,15 @@ export async function startCapture(
         setTimeout(resolve, 4000)
       })
       worker.terminate()
+
+      // Written last, once the audio is safely closed, so its presence means
+      // the whole session completed rather than merely that stop was pressed.
+      try {
+        log.ended(latestSample)
+        await saveLog(log.toJSON())
+      } catch (error) {
+        callbacks.onError?.(`could not write the end of the log: ${String(error)}`)
+      }
     },
   }
 }

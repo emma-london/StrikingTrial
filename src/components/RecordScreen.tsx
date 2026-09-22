@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
-import { startCapture, type CaptureHandle } from '../logic/audio/capture'
+import { startCapture, type CaptureHandle, type HeartbeatView } from '../logic/audio/capture'
+import { toDbfs } from '../logic/session/level'
 import { saveLog } from '../logic/session/store'
 import type { ProfileSource } from '../logic/session/sessionLog'
 
@@ -29,6 +30,7 @@ export default function RecordScreen({ onFinished }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [markers, setMarkers] = useState(0)
   const [blocks, setBlocks] = useState(0)
+  const [beat, setBeat] = useState<HeartbeatView | null>(null)
   const handle = useRef<CaptureHandle | null>(null)
 
   const toggleBell = (bell: number) =>
@@ -52,11 +54,13 @@ export default function RecordScreen({ onFinished }: Props) {
         },
         {
           onBlock: () => setBlocks((n) => n + 1),
+          onHeartbeat: (view) => setBeat(view),
           onError: (message) => setError(message),
         },
       )
       setMarkers(0)
       setBlocks(0)
+      setBeat(null)
       setRecording(true)
     } catch (cause) {
       setError(
@@ -96,6 +100,31 @@ export default function RecordScreen({ onFinished }: Props) {
         <p className="rec-detail">
           {tower} · bells {bells.join(' ')} · {blocks.toLocaleString()} blocks captured
         </p>
+
+        {/* Says nothing about striking — only whether the phone is hearing the
+            bells usefully from where it is sitting. Worth knowing in the tower
+            rather than after running the pipeline at home. */}
+        <div className="meter" aria-hidden="true">
+          <div className="meter-bar" style={{ width: `${barWidth(beat?.rms ?? 0)}%` }} />
+          <div className="meter-peak" style={{ left: `${barWidth(beat?.peak ?? 0)}%` }} />
+        </div>
+        <p className="rec-detail" role="status">
+          {beat
+            ? `level ${toDbfs(beat.peak).toFixed(0)} dB peak${beat.clipped > 0 ? ' · CLIPPING' : ''}`
+            : 'listening…'}
+        </p>
+
+        {/* ADR-0006: the two clocks. A steady creep is the oscillator; a step is
+            a stall. The figure is here so a stall is visible in the tower. */}
+        {beat && (
+          <p className="rec-detail">
+            {formatClock(beat.elapsedWallMs)} recorded ·{' '}
+            {Math.abs(beat.driftMs) < 1000
+              ? 'audio keeping up'
+              : `audio ${(beat.driftMs / 1000).toFixed(1)}s behind the clock`}
+            {beat.wakeLock ? ' · screen held awake' : ' · screen not held'}
+          </p>
+        )}
         <button type="button" className="mark-button" onClick={mark}>
           That sounded wrong
           {markers > 0 && <span className="mark-count">{markers} marked</span>}
@@ -179,4 +208,17 @@ export default function RecordScreen({ onFinished }: Props) {
 
 function slug(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+/** A 0-1 level as a percentage of the meter, on a dB scale so quiet is visible. */
+function barWidth(level: number): number {
+  const db = toDbfs(level, -60)
+  return Math.max(0, Math.min(100, ((db + 60) / 60) * 100))
+}
+
+function formatClock(ms: number): string {
+  const total = Math.floor(ms / 1000)
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
 }

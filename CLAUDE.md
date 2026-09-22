@@ -165,6 +165,34 @@ apart: `not-measured` (never recorded here — Eltham's front two) and
 `drowned-out` (measured, but every partial is buried under another ringing bell).
 They look identical on screen and have opposite fixes, and neither is a bug.
 
+## Liveness and the level meter (22 Sep, ADR-0006)
+
+A session now says whether it stopped or was killed. Every 5 s a `heartbeat`
+event records the sample index, the wall clock, the difference between them,
+`document.visibilityState` and whether the screen wake lock is *actually held* —
+and **the log is flushed to OPFS on every heartbeat**. Before this it was written
+only at `stop()`, so a session the phone killed took its own evidence with it,
+which is the one case the log exists for. A clean stop writes `ended`; **a log
+with no `ended` event is a session that died**, and `SessionList` says so with
+the last heartbeat's figures rather than showing a short recording that reads as
+a short practice.
+
+Read the drift series by shape, not size: **a slope is the oscillator, a step is
+a stall.** An AudioContext's real rate is not its nominal one, so half a second
+across ninety minutes is normal and means nothing. `largestDriftStep` separates
+them. Timers are throttled in a background tab, so heartbeats arriving late or
+stopping altogether is signal, not a bug to fix.
+
+`level.ts` is a capture check, not a measurement: peak, RMS and a clipping count
+per block, shown on the recording screen. It answers "is this phone, here,
+hearing the bells at all" in the tower instead of after running the pipeline at
+home. Nothing downstream reads it and it says nothing about striking.
+
+`wakeLock.ts` is best-effort by design — the browser drops the lock whenever the
+page hides and it has to be re-requested, and it can fail silently, so the app
+records whether it is held rather than whether it was asked for. A wake lock that
+cannot be had never stops a recording (ADR-0001).
+
 ## Not yet built
 
 The live bell indicator, the row display, and the tracker. The tracker is the
